@@ -7,7 +7,7 @@ import json
 from tqdm import tqdm
 import trimesh
 import time
-#修改一下git
+
 
 cur_work_path = os.getcwd()
 sys.path.append(cur_work_path)
