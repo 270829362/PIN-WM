@@ -1,0 +1,19 @@
+pybullet build time: Jan 29 2025 23:16:28
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+Output folder: ./output/sim_push_t
+log_dir: ./output/sim_push_t/logs/2025-11-21_11-59-14
+Save folder: ./output/sim_push_t/dynamic/train/1763697556
+startThreads creating 1 threads.
+starting thread 0
+started thread 0 
+argc=2
+argv[0] = --unused
+argv[1] = --start_demo_name=Physics Server
+ExampleBrowserThreadFunc started
+X11 functions dynamically loaded using dlopen/dlsym OK!
+
+	cannot connect to X server
+

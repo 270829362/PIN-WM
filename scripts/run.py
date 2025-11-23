@@ -45,7 +45,6 @@ data_args = dict(
 
 render_args = dict(
     sh_degree = 3,
-
 )
 
 sim_args = dict(
@@ -79,10 +78,19 @@ def train_physical_materials(output_path,builder,obj_id,ee_id,dataset,simulator:
     start_idx = 0
     max_idx = f_max - frame_interval
     progress_bar = tqdm(range(0, train_iteration), desc="Dynamic Train Progress")
+    
     for iter in range(0,train_iteration + 1):
         simulator.reset()
         images = []
         poses = []
+
+        # 初始化：拆分位置和旋转为单独的列表（修正：只初始化，不提前append）
+        obj_positions = []  # 仅保存位置，最终形状 (32, 3)
+        obj_rotations = []  # 仅保存旋转，最终形状 (32, 4)
+        ee_positions = []   # 机械臂位置，(32, 3)
+        ee_rotations = []   # 机械臂旋转，(32, 4)
+
+        # 帧循环：遍历32帧，每帧获取姿态并保存（修正：循环内才保存）
         for f in range(f_max):
             if f > 0:
                 ee_world_position,_ = simulator.get_body_pose_clone(ee_id)
@@ -92,24 +100,34 @@ def train_physical_materials(output_path,builder,obj_id,ee_id,dataset,simulator:
                 for i in range(n_substeps):
                     simulator.step()
 
+            # 第一步：获取方块姿态（先定义变量，再使用）
             obj_position,obj_rotation = simulator.get_body_pose(obj_id)
             gaussians.reset_position_rotation(obj_position,obj_rotation)
+
+            # 第二步：保存方块姿态（修正：加detach()+squeeze()，避免梯度和维度问题）
+            obj_positions.append( obj_position.cpu().detach().numpy().squeeze() )
+            obj_rotations.append( obj_rotation.cpu().detach().numpy().squeeze() )
+
+            # 第三步：获取并保存机械臂姿态（修正：先获取，再保存）
+            ee_position, ee_rotation = simulator.get_body_pose(ee_id)
+            ee_positions.append( ee_position.cpu().detach().numpy().squeeze() )
+            ee_rotations.append( ee_rotation.cpu().detach().numpy().squeeze() )
+
+            # 原有渲染逻辑
             render_pkg = gaussian_renderer.render(dynamic_train_camera[0], gaussians)
-
-
             image = render_pkg['render'] 
             images.append(image)
             poses.append(torch.cat((obj_position.clone(),wxyz2xyzw(obj_rotation.clone())),dim=-1))
 
+        # 原有迭代间隔逻辑
         if iter % opt_interval == 0 and iter > 0:
             start_idx += frame_interval
             if start_idx > max_idx :
                 start_idx = max_idx
 
+        # 原有loss计算和日志记录
         loss = rendering_loss_batch(images[:12],gt_images[:12])
-
         loss.backward(retain_graph=True)
-        
         psnr = mean_psnr(images,gt_images)
 
         all_physical_materials = simulator.get_all_physical_materials()
@@ -118,35 +136,47 @@ def train_physical_materials(output_path,builder,obj_id,ee_id,dataset,simulator:
             logger.record("metric/psnr"+ str(random_init_index),psnr)
             logger.dump(iter)
 
-
         info_dict = {"loss": loss.item(),"psnr": psnr.item()}
         progress_bar.set_postfix(info_dict)
         progress_bar.update(1)
 
+        # 保存图像、物理参数、姿态序列（修正：同步保存，无残留变量）
         if (iter % builder.sim_args.save_iteration) == 0:
             save_path = os.path.join(output_path, "iteration_{}".format(iter))
             os.makedirs(save_path, exist_ok = True)
+            
+            # 1. 保存渲染图（原有逻辑）
             image_path = os.path.join(save_path, "images")
             os.makedirs(image_path, exist_ok = True)
             for index,image in enumerate(images):
                 save_img_u8(image.permute(1,2,0).cpu().detach().numpy(), os.path.join(image_path, 'sim_{}.png'.format(index)))
-            physical_materials_original_json_list = []
+            
+            # 2. 保存物理参数（原有逻辑）
             physical_materials_activate_json_list = []
             for physical_materials in all_physical_materials:
-                physical_materials_original_json_list.append(physical_materials.get_original_json_dict())
                 physical_materials_activate_json_list.append(physical_materials.get_activate_json_dict())
             with open(os.path.join(save_path,'physical_materials_iter.json'), 'w') as json_file:
-                json.dump({
-                           "activate":physical_materials_activate_json_list}, fp=json_file ,indent=4)
+                json.dump({"activate":physical_materials_activate_json_list}, fp=json_file ,indent=4)
 
+            # 3. 保存姿态序列（修正：使用拆分后的列表，形状均匀）
+            pose_save_path = os.path.join(save_path, "pose_sequence.npz")
+            np.savez(
+                pose_save_path,
+                obj_positions=np.array(obj_positions),  # (32, 3)
+                obj_rotations=np.array(obj_rotations),  # (32, 4)
+                ee_positions=np.array(ee_positions),    # (32, 3)
+                ee_rotations=np.array(ee_rotations),    # (32, 4)
+                frame_dt=builder.sim_args.frame_dt
+            )
+
+        # 原有优化器更新逻辑
         optimizer.step()
         optimizer.zero_grad()
+    
     progress_bar.close()
-
     return loss
 
 def create_push_t_scene(builder,simulator:Simulator):
-
     plane_mesh_path = "./envs/asset/plane/plane_collision.obj"
     obj_mesh_path = "./envs/asset/cube_t/cube_t.obj"
     ee_mesh_path = "./envs/asset/ee/ee.obj"
@@ -168,21 +198,9 @@ def create_push_t_scene(builder,simulator:Simulator):
     obj_mesh = trimesh.load(obj_mesh_path)
     obj_physical_material = Physical_Materials(requires_grad = True,device=simulator.device)
     obj_physical_material.set_material("inertia",[
-                [
-                    0.01,
-                    0.0,
-                    0.0
-                ],
-                [
-                    0.0,
-                    0.01,
-                    0.0
-                ],
-                [
-                    0.0,
-                    0.0,
-                    0.01
-                ]
+                [0.01, 0.0, 0.0],
+                [0.0, 0.01, 0.0],
+                [0.0, 0.0, 0.01]
             ])   
     obj_id = simulator.create_mesh_body(obj_mesh,obj_physical_material,requires_grad=True,
                                         urdf = obj_urdf_path,
@@ -203,8 +221,6 @@ def create_push_t_scene(builder,simulator:Simulator):
     simulator.create_joint(ee_id,Joint_Type.NO_ROT_CONSTRATNT)
 
     return obj_id,ee_id
-
-
 
 def test_dynamic_train_multbody_push_t():
     all_args = {
@@ -232,7 +248,7 @@ def test_dynamic_train_multbody_push_t():
             os.makedirs(output_path, exist_ok = True)
             print("Save folder:",train_path)
             sim_device = "cuda"
-            vis = True
+            vis = False  # 已禁用可视化，避免X server错误
             simulator = Simulator(builder.sim_args.dtime,device=sim_device,vis=vis)
             obj_id,ee_id = create_push_t_scene(builder,simulator)
             obj_position,obj_rotation = simulator.get_body_pose_clone(obj_id)
@@ -250,12 +266,5 @@ def test_dynamic_train_multbody_push_t():
 
         print("loss_mean",loss_mean)
 
-
-
 if __name__=='__main__':
     test_dynamic_train_multbody_push_t()
-
-
-
-
-
