@@ -8,7 +8,7 @@ import json  # 物理参数保存（JSON格式，便于后续加载分析）
 from tqdm import tqdm  # 训练进度条（直观显示训练过程）
 import trimesh  # 3D网格加载/处理（仿真场景中物体模型加载）
 import time  # 时间戳（用于输出目录命名，区分多次训练）
-
+#
 # 设置当前工作目录并添加到系统路径（确保模块导入正常）
 cur_work_path = os.getcwd()
 sys.path.append(cur_work_path)
